@@ -5,7 +5,6 @@ from json import dump
 from urllib3.exceptions import InsecureRequestWarning
 from urllib3 import disable_warnings
 
-
 class Parser:
 
     def __init__(self):
@@ -13,58 +12,72 @@ class Parser:
         self.out_data = []
         self.user = UserAgent()
 
-    def __create_hash_table(self, table_data):
-        assert len(self.headers) == len(table_data)
+    def __create_hash_table(self, table_data): 
         data = {}
-        for num in len(self.headers):
-            match num:
-                case 0 | 2 | 4 | 5:
-                    data[self.headers[num]] = table_data[num].text
-                case 1:
-                    data[self.headers[num]] = table_data[num].text + table_data[num].find('a').text
-                case 4:
-                    data[self.headers[num]] = table_data[num].find('span').text
+        for num in range(len(self.headers)):
+            if num == 0 or num == 2 or num == 5:
+                data[self.headers[num]] = table_data[num].text.strip()
+            elif num == 1:
+                data[self.headers[num]] = table_data[num].text.strip() + table_data[num].find('a').text.strip()
+            elif num == 4:
+                data[self.headers[num]] = table_data[num].find('span').text.strip()
         return data
 
     def create_headers(self, headers_parsed):
-        for n, header in enumerate(headers_parsed):
-            if n == 1:
-                self.headers.append(header.text)
-            else:
-                self.headers.append(header.find('a').text)
+        for header in headers_parsed:
+            self.headers.append(header.text.strip())
 
     def parse(self, link):
         disable_warnings(InsecureRequestWarning)
-        headers = {"useragent": self.user.random}
+        headers = {"user-agent": self.user.random}
         resp = get(link, verify=False, headers=headers)
         if resp.status_code != 200:
-            return 0
+            raise WebError(resp.status_code)
         else:
-            page = bs(resp.text)
+            page = bs(resp.text, "html.parser")
             table = page.find('table')
-            headers_parsed = map(lambda x: x[1].find('a').text if x[0] != 1 else x.text, map(list(), enumerate()))
-            self.create_headers(headers_parsed)
+            headers_parsed = table.find('thead').find("tr").find_all('th')
+            if not self.headers:
+                self.create_headers(headers_parsed)
             rows = table.find('tbody').find_all('tr')
+            if not rows:  # Stop if there are no rows found
+                return None
             for row in rows:
                 data = row.find_all('td')
                 processed_data = self.__create_hash_table(data)
                 self.out_data.append(processed_data)
             return self.out_data
 
+class WebError(Exception):
+    def __init__(self, code):
+        super().__init__()
+        self.code = code
+
+    def __str__(self) -> str:
+        return f'Ошибка соединения \n Код ошибки: {self.code}'
 
 def main():
     parser = Parser()
     num = 1
+    all_data = []
     while True:
         link = f'https://goszakupki.by/tenders/posted?page={num}'
-        out_data = []
-        data = parser.parse(link)
-        if data != 0:
-            out_data.extend(data)
-            with open('tenders.json', 'w') as f:
-                dump(out_data, f)
+        try:
+            data = parser.parse(link)
+        except WebError as e:
+            print(e)
+            break
+        
+        if not data:
+            print(f"No more data found on page {num}. Stopping the scraper.")
+            break
+        
+        all_data.extend(data)
         num += 1
+        print(f'Scraped page number {num - 1}.')
 
+    with open('tenders.json', 'w') as f:
+        dump(all_data, f, ensure_ascii=False, indent=4)
 
 if __name__ == '__main__':
     main()
